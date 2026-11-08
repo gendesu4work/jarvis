@@ -26,7 +26,7 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" installer\Jarvis.iss
           if (-not (Test-Path dist\Jarvis-Setup.exe)) { throw "installer not built" }
 
-      - name: Publish to Releases (tag: latest)
+      - name: "Publish to Releases (tag latest)"
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
