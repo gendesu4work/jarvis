@@ -185,6 +185,14 @@ def ensure_chrome():
 
 
 # ------------------------------------------------------------------ relay --
+def freellmapi_port():
+    """FreeLLMAPI's local port (from its own config; default 31415)."""
+    try:
+        return int(json.load(open(os.path.expandvars(r"%APPDATA%\FreeLLMAPI\config.json"))).get("port", 31415))
+    except (OSError, ValueError):
+        return 31415
+
+
 def _pipe(a, b):
     def one(src, dst):
         try:
@@ -372,6 +380,13 @@ class Bridge:
                     if not ensure_chrome():
                         s.close(); continue
                     c = socket.create_connection(("127.0.0.1", CHROME_PORT), timeout=5)
+                    c.settimeout(None)
+                    _pipe(s, c)
+                elif kind == b"L":                        # local LLM gateway (FreeLLMAPI) on Windows
+                    try:
+                        c = socket.create_connection(("127.0.0.1", freellmapi_port()), timeout=5)
+                    except OSError:
+                        s.close(); continue                   # not running -> Hermes falls back to Gemini
                     c.settimeout(None)
                     _pipe(s, c)
                 elif kind == b"C":                        # one JSON command

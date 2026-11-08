@@ -65,6 +65,9 @@ def accept_pool():
 try:
     threading.Thread(target=accept_pool, daemon=True).start()
     threading.Thread(target=serve, args=(9334, b"C"), daemon=True).start()
+    # 31416 -> FreeLLMAPI on Windows (31415). A different number on purpose: WSL mirrors its
+    # listeners onto Windows localhost, and 31415 there belongs to FreeLLMAPI.
+    threading.Thread(target=serve, args=(31416, b"L"), daemon=True).start()
     serve(9222, b"G")
 except OSError as e:
     print("relay already running or port busy:", e, file=sys.stderr)

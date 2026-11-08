@@ -25,6 +25,7 @@ Source: "..\app\*"; DestDir: "{app}"; Excludes: "__pycache__,*.pyc,tools\_*"; Fl
 Source: "..\profile\*"; DestDir: "{app}\profile"; Flags: recursesubdirs ignoreversion skipifsourcedoesntexist
 Source: "setup.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 Source: "sync.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
+Source: "connect_freellmapi.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\installer\setup.ps1"""; Description: "Set up Jarvis (WSL, Hermes, voice, your settings)"; Flags: postinstall

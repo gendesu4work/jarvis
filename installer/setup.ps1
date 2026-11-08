@@ -191,6 +191,7 @@ Link (Join-Path $programs "Jarvis.lnk") $exe
 Link (Join-Path ([Environment]::GetFolderPath("Desktop")) "Jarvis.lnk") $exe
 Link (Join-Path ([Environment]::GetFolderPath("Startup")) "Jarvis.lnk") $exe
 Link (Join-Path $programs "Jarvis Terminal.lnk") "$env:WINDIR\System32\wsl.exe" "-d $Distro --cd `"$wsWsl`" -e bash -lc `"exec ~/.local/bin/hermes`"" "Type to Jarvis (asks before risky actions)"
+Link (Join-Path $programs "Jarvis - Connect FreeLLMAPI.lnk") "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $App 'installer\connect_freellmapi.ps1')`"" "Use FreeLLMAPI as Jarvis's AI (Gemini stays as backup)"
 Link (Join-Path $programs "Jarvis Sync Settings.lnk") "powershell.exe" "-ExecutionPolicy Bypass -File `"$(Join-Path $App 'installer\sync.ps1')`"" "Sync Jarvis settings with GitHub"
 Ok "Start menu, Desktop and auto-start at sign-in"
 
