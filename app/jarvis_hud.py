@@ -187,12 +187,15 @@ def pc_loop():
 
     def scan():
         procs = [me] + me.children(recursive=True)
-        for p in psutil.process_iter(["name", "cmdline"]):
+        for p in psutil.process_iter(["name"]):          # names only: cheap
             try:
                 name = (p.info["name"] or "").lower()
-                cmd = " ".join(p.info["cmdline"] or [])
-                if name.startswith("vmmem") or "JarvisVoice\\chrome-profile" in cmd or "JarvisVoice\\edge-profile" in cmd:
+                if name.startswith("vmmem"):
                     procs.append(p)
+                elif name in ("chrome.exe", "msedge.exe"):  # only these need their command line
+                    cmd = " ".join(p.cmdline())
+                    if "JarvisVoice\\chrome-profile" in cmd or "JarvisVoice\\edge-profile" in cmd:
+                        procs.append(p)
             except (psutil.Error, TypeError):
                 pass
         seen, out = set(), []
@@ -208,7 +211,7 @@ def pc_loop():
     psutil.cpu_percent(None)
     while True:
         time.sleep(2)
-        if time.time() - last_scan > 15:
+        if time.time() - last_scan > 60:
             jarvis_procs, last_scan = scan(), time.time()
         vm = psutil.virtual_memory()
         j_cpu = j_mem = 0.0

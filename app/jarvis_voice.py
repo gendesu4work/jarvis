@@ -269,38 +269,153 @@ class Jarvis:
         self.voice = PiperVoice.load(VOICE_PATH)
         self.vrate = self.voice.config.sample_rate
         self.gain = 10 ** (OUTPUT_GAIN_DB / 20)
+        self.out_rate = int(sd.query_devices(self.out_dev)["default_samplerate"])   # speakers' native rate
+        from scipy.signal import resample_poly  # noqa: F401  (load now, not during the first reply)
+        self._start_player()
+
+    # ------------------------------------------------- separate audio player --
+    def _start_player(self):
+        """Run playback in its own process so busy moments in Jarvis can't make the voice stutter."""
+        import json
+        self._player = None
+        self._pl_pos, self._pl_done, self._pl_id = {}, {}, 0
+        try:
+            p = subprocess.Popen([sys.executable, os.path.join(HERE, "jarvis_player.py"),
+                                  str(self.out_dev), str(self.out_rate)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 creationflags=NO_WINDOW)
+            first = p.stdout.readline()
+            if b"ready" not in first:
+                raise RuntimeError("player did not start")
+        except Exception as e:
+            log(f"Audio player process unavailable ({e!r}); playing in-process.")
+            return
+
+        def read():
+            for line in p.stdout:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if "pos" in m:
+                    self._pl_pos[m["id"]] = m["pos"]
+                if m.get("done"):
+                    if m.get("underflows"):
+                        log(f"audio: {m['underflows']} playback dropouts")
+                    ev = self._pl_done.get(m["id"])
+                    if ev:
+                        ev.set()
+            self._player = None
+        threading.Thread(target=read, daemon=True).start()
+        self._player = p
+
+    def _player_play(self, audio):
+        """Send audio to the player process. Returns (id, done_event) or None if unavailable."""
+        import json
+        p = self._player
+        if p is None or p.poll() is not None:
+            return None
+        self._pl_id += 1
+        jid, ev = self._pl_id, threading.Event()
+        self._pl_done[jid] = ev
+        self._pl_pos[jid] = 0
+        data = audio.astype(np.float32).tobytes()
+        try:
+            p.stdin.write(json.dumps({"cmd": "play", "id": jid, "n": len(data)}).encode() + b"\n" + data)
+            p.stdin.flush()
+        except OSError:
+            return None
+        return jid, ev
+
+    def _player_stop(self):
+        import json
+        p = self._player
+        if p is not None and p.poll() is None:
+            try:
+                p.stdin.write(json.dumps({"cmd": "stop"}).encode() + b"\n"); p.stdin.flush()
+            except OSError:
+                pass
 
     # -------------------------------------------------------------- audio --
     def _play(self, audio, rate, report_levels=False):
+        """Play audio smoothly: resampled once to the speakers' native rate, fed from a large
+        buffer (so busy moments elsewhere in Jarvis can't cause stutter). Dropouts are logged."""
+        out_rate = getattr(self, "out_rate", 0) or rate
         audio = np.clip(audio * self.gain, -1.0, 1.0).astype(np.float32)
+        if rate != out_rate:
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(int(out_rate), int(rate))
+            audio = np.clip(resample_poly(audio, int(out_rate) // g, int(rate) // g), -1.0, 1.0).astype(np.float32)
+        audio = np.concatenate([audio, np.zeros(int(out_rate * 0.12), np.float32)])   # clean tail
         with self._play_lock:
             self._stop_speech.clear()
-            try:
-                sd.play(audio, rate, device=self.out_dev,
-                        extra_settings=sd.WasapiSettings(auto_convert=True))
-            except Exception:
-                sd.play(audio, rate, device=self.out_dev)
-            if report_levels:
-                hop = int(rate * 0.05)
+            sent = self._player_play(audio) if getattr(self, "_player", None) else None
+            if sent:                                     # normal path: separate player process
+                jid, done = sent
+                hop = int(out_rate * 0.05)
                 env = [float(np.sqrt((audio[i:i + hop] ** 2).mean()))
                        for i in range(0, len(audio), hop)] or [0.0]
-                t0 = time.time()
-                self._speak_t0 = t0
-                self._out_hist = []                 # (time, level) of what Jarvis is playing: for barge-in
-                self._speaking_audio.set()
-                while True:
-                    i = int((time.time() - t0) / 0.05)
-                    if i >= len(env) or self._stop_speech.is_set():
+                if report_levels:
+                    self._speak_t0 = time.time()
+                    self._out_hist = []
+                    self._speaking_audio.set()
+                deadline = time.time() + len(audio) / out_rate + 5
+                while not done.is_set() and time.time() < deadline:
+                    if self._stop_speech.is_set():
+                        self._player_stop()
+                        done.wait(1.0)
                         break
-                    self._out_hist.append((time.time(), env[i]))
-                    if len(self._out_hist) > 40:
-                        del self._out_hist[:10]
-                    self.emit("level", {"v": min(1.0, env[i] * 6), "src": "out"})
+                    if report_levels:
+                        i = min(len(env) - 1, self._pl_pos.get(jid, 0) // hop)
+                        self._out_hist.append((time.time(), env[i]))
+                        if len(self._out_hist) > 40:
+                            del self._out_hist[:10]
+                        self.emit("level", {"v": min(1.0, env[i] * 6), "src": "out"})
                     time.sleep(0.05)
+                self._speaking_audio.clear()
+                self._pl_done.pop(jid, None); self._pl_pos.pop(jid, None)
+                return
+            pos, under, done = [0], [0], threading.Event()   # fallback: play in this process
+
+            def feed(outdata, frames, t, status):
+                if status.output_underflow:
+                    under[0] += 1
                 if self._stop_speech.is_set():
-                    sd.stop()
-            sd.wait()
+                    outdata.fill(0)
+                    raise sd.CallbackStop
+                chunk = audio[pos[0]:pos[0] + frames]
+                outdata[:len(chunk), 0] = chunk
+                pos[0] += len(chunk)
+                if len(chunk) < frames:
+                    outdata[len(chunk):].fill(0)
+                    raise sd.CallbackStop
+
+            kw = dict(device=self.out_dev, samplerate=out_rate, channels=1, dtype="float32",
+                      blocksize=1024, latency="high", callback=feed, finished_callback=done.set)
+            try:
+                stream = sd.OutputStream(extra_settings=sd.WasapiSettings(auto_convert=True), **kw)
+            except Exception:
+                stream = sd.OutputStream(**kw)
+            with stream:
+                if report_levels:
+                    hop = int(out_rate * 0.05)
+                    env = [float(np.sqrt((audio[i:i + hop] ** 2).mean()))
+                           for i in range(0, len(audio), hop)] or [0.0]
+                    self._speak_t0 = time.time()
+                    self._out_hist = []             # (time, level) of what Jarvis is playing: for barge-in
+                    self._speaking_audio.set()
+                    while not done.is_set() and not self._stop_speech.is_set():
+                        i = min(len(env) - 1, pos[0] // hop)
+                        self._out_hist.append((time.time(), env[i]))
+                        if len(self._out_hist) > 40:
+                            del self._out_hist[:10]
+                        self.emit("level", {"v": min(1.0, env[i] * 6), "src": "out"})
+                        time.sleep(0.05)
+                done.wait(timeout=len(audio) / out_rate + 3)
             self._speaking_audio.clear()
+            if under[0]:
+                log(f"audio: {under[0]} playback dropouts")
 
     def _synth(self, text):
         parts = []
