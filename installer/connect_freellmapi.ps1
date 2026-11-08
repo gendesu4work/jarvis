@@ -49,7 +49,7 @@ if ($tools -ne "yes") {
 }
 
 # Save the key inside Jarvis's sandbox only (~/.hermes/.env), via stdin - never on a command line.
-$save = 'read -r k; f="$HOME/.hermes/.env"; touch "$f"; grep -v "^FREELLMAPI_KEY=" "$f" > "$f.tmp"; echo "FREELLMAPI_KEY=$k" >> "$f.tmp"; mv "$f.tmp" "$f"; chmod 600 "$f"'
+$save = 'read -r k; k=$(printf %s "$k" | tr -d "\r\n "); f="$HOME/.hermes/.env"; touch "$f"; grep -v "^FREELLMAPI_KEY=" "$f" > "$f.tmp"; echo "FREELLMAPI_KEY=$k" >> "$f.tmp"; mv "$f.tmp" "$f"; chmod 600 "$f"'
 $key | & wsl.exe -d Ubuntu -e bash -c $save
 $cfg = @"
 import os, shutil, time
