@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Jarvis relay (runs inside WSL, started by the Windows Jarvis app).
+
+127.0.0.1:9222  Chrome DevTools endpoint for Hermes's browser tool (piped to Jarvis's Chrome)
+127.0.0.1:9334  one-line JSON commands (open-app, browser)
+127.0.0.1:9333  pool: idle connections dialed in from the Windows bridge
+"""
+import queue, socket, sys, threading
+
+pool = queue.Queue()
+
+def listen(port):
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", port)); s.listen(32); return s
+
+def pipe(a, b):
+    def one(src, dst):
+        try:
+            while True:
+                d = src.recv(65536)
+                if not d: break
+                dst.sendall(d)
+        except OSError: pass
+        finally:
+            for x in (src, dst):
+                try: x.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+    threading.Thread(target=one, args=(a, b), daemon=True).start()
+    threading.Thread(target=one, args=(b, a), daemon=True).start()
+
+def take_pool(timeout=15):
+    while True:
+        conn = pool.get(timeout=timeout)
+        try:                                   # skip dead pool connections
+            conn.setblocking(False)
+            if conn.recv(1, socket.MSG_PEEK) == b"":
+                conn.close(); continue
+        except BlockingIOError:
+            pass
+        except OSError:
+            conn.close(); continue
+        conn.setblocking(True)
+        return conn
+
+def serve(port, tag):
+    srv = listen(port)
+    while True:
+        client, _ = srv.accept()
+        def handle(client=client):
+            try:
+                w = take_pool()
+            except queue.Empty:
+                if tag == b"C":
+                    client.sendall(b'{"ok": false, "error": "Jarvis app is not running on Windows."}\n')
+                client.close(); return
+            w.sendall(tag)
+            pipe(client, w)
+        threading.Thread(target=handle, daemon=True).start()
+
+def accept_pool():
+    srv = listen(9333)
+    while True:
+        c, _ = srv.accept(); pool.put(c)
+
+try:
+    threading.Thread(target=accept_pool, daemon=True).start()
+    threading.Thread(target=serve, args=(9334, b"C"), daemon=True).start()
+    serve(9222, b"G")
+except OSError as e:
+    print("relay already running or port busy:", e, file=sys.stderr)
+    sys.exit(0)

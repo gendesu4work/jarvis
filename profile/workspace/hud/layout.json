@@ -1,0 +1,8 @@
+{
+  "title": "JARVIS",
+  "subtitle": "POWERED BY NEXUS MEDIA",
+  "monitor": "left",
+  "left": ["systems", "pc", "usage", "notes", "memory"],
+  "right": ["conversation", "schedule", "workspace"],
+  "chips": ["What can you do?", "Read my notes", "Open Chrome", "Remind me in 10 minutes to stretch", "What do you remember about me?"]
+}

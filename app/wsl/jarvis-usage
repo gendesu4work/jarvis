@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Jarvis usage meter: today's Gemini requests/tokens per model (from Hermes's agent.log),
+estimated limits, reset time, cost and hours of use left. Prints JSON."""
+import datetime as dt, glob, json, os, re
+from zoneinfo import ZoneInfo
+
+PT = ZoneInfo("America/Los_Angeles")           # Gemini daily quotas reset at midnight Pacific
+WORKSPACE = open(os.path.expanduser("~/.jarvis/workspace")).read().strip()
+LIMITS_FILE = WORKSPACE + "/hud/usage.json"
+DEFAULT = {
+    "daily_limits": {                            # free-tier requests/day (estimates; edit if AI Studio shows others)
+        "gemini-3.5-flash-lite": 500, "gemini-3.1-flash-lite": 500, "gemini-3.5-flash": 20,
+        "gemini-2.5-flash": 20, "gemini-3.1-flash-lite-preview": 500, "gemini-2.5-flash-lite": 1000},
+    "answer_models": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash",
+                      "gemini-2.5-flash", "gemini-3.1-flash-lite-preview"],
+    "prices_per_million": {                      # paid-tier USD: [input, cached input, output]
+        "flash-lite": [0.30, 0.03, 2.50], "flash": [1.50, 0.15, 9.00]},
+    "credit_usd": None, "credit_since": None,    # set if you buy credits, e.g. 5 and "2026-11-09"
+}
+
+cfg = dict(DEFAULT)
+try:
+    user = json.load(open(LIMITS_FILE, encoding="utf-8-sig"))
+    for k, v in user.items():
+        if k in cfg:
+            cfg[k] = {**cfg[k], **v} if isinstance(cfg[k], dict) and isinstance(v, dict) else v
+except (OSError, ValueError):
+    pass
+
+now_pt = dt.datetime.now(PT)
+day_start = now_pt.replace(hour=0, minute=0, second=0, microsecond=0)
+reset_in = int((day_start + dt.timedelta(days=1) - now_pt).total_seconds())
+credit_since = None
+if cfg.get("credit_since"):
+    try:
+        credit_since = dt.datetime.fromisoformat(cfg["credit_since"]).replace(tzinfo=PT)
+    except ValueError:
+        pass
+
+CALL = re.compile(r"^(\S+ \S+),\d+ .*API call #\d+: model=(\S+) provider=\S+ in=(\d+) out=(\d+)(?:.*cache=(\d+)/)?")
+LIMIT = re.compile(r"^(\S+ \S+),\d+ .*?(PerDay|PerMinute)\S*.*?model: ([a-z0-9.\-]+)|"
+                   r"^(\S+ \S+),\d+ .*limit: \d+, model: ([a-z0-9.\-]+), description: Generate content requests per (day|minute)")
+
+ALIASES = {"gemini-3.6-flash": "gemini-3.5-flash"}   # Google reports quota under the serving model's name
+
+
+def price_key(model):
+    return "flash-lite" if "lite" in model else "flash"
+
+models, buckets, exhausted, minute_limited = {}, set(), set(), set()
+spent_today = spent_credit = 0.0
+tok = {"in": 0, "out": 0, "cached": 0}
+logs = sorted(glob.glob(os.path.expanduser("~/.hermes/logs/agent.log*")), key=os.path.getmtime)
+for path in logs + [os.path.expanduser("~/.hermes/logs/errors.log")]:
+    try:
+        f = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    for line in f:
+        m = CALL.match(line)
+        if m and "agent.log" in path:
+            t = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").astimezone(PT)
+            model, i, o, c = m.group(2), int(m.group(3)), int(m.group(4)), int(m.group(5) or 0)
+            p = cfg["prices_per_million"].get(price_key(model), [0, 0, 0])
+            cost = ((i - c) * p[0] + c * p[1] + o * p[2]) / 1e6
+            if credit_since and t >= credit_since:
+                spent_credit += cost
+            if t < day_start:
+                continue
+            models[model] = models.get(model, 0) + 1
+            tok["in"] += i; tok["out"] += o; tok["cached"] += c
+            spent_today += cost
+            buckets.add(t.strftime("%H") + str(t.minute // 10))
+            continue
+        if "RESOURCE_EXHAUSTED" in line or "limit exceeded" in line or "limit: " in line:
+            m2 = LIMIT.search(line)
+            if m2:
+                ts = m2.group(1) or m2.group(4); kind = (m2.group(2) or m2.group(6) or "").lower()
+                model = m2.group(3) or m2.group(5)
+                model = ALIASES.get(model, model)
+                t = dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").astimezone(PT)
+                if t >= day_start and "day" in kind:
+                    exhausted.add(model)
+                if (now_pt - t).total_seconds() < 90 and "minute" in kind:
+                    minute_limited.add(model)
+
+limits = cfg["daily_limits"]
+answer = []
+left = 0
+for mdl in cfg["answer_models"]:
+    used, lim = models.get(mdl, 0), limits.get(mdl)
+    full = mdl in exhausted or (lim is not None and used >= lim)
+    rem = 0 if full or lim is None else max(0, lim - used)
+    left += rem
+    answer.append({"model": mdl, "used": used, "limit": lim, "full": full, "remaining": rem})
+total_used = sum(models.values())
+active_hours = max(len(buckets) / 6.0, 0.1)
+per_hour = total_used / active_hours if total_used >= 6 else 60.0      # default guess: 60 requests/hour
+out = {
+    "models": answer,
+    "other_models": {k: v for k, v in models.items() if k not in cfg["answer_models"]},
+    "requests_today": total_used, "requests_left": left,
+    "tokens": tok, "cost_today_usd": round(spent_today, 4),
+    "requests_per_hour": round(per_hour, 1),
+    "hours_left": round(left / per_hour, 1) if per_hour else None,
+    "reset_in_seconds": reset_in, "rate_limited_now": sorted(minute_limited),
+    "credit_usd": cfg.get("credit_usd"),
+    "credit_left_usd": round(cfg["credit_usd"] - spent_credit, 2) if cfg.get("credit_usd") else None,
+}
+print(json.dumps(out))

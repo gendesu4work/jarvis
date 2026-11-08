@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Ask the Windows Jarvis app to do something on the PC.
+
+  open-app "Riot Client"     open an app from the Start menu / Desktop by name
+  open-app --list [filter]   list app names you can open
+  open-app --browser         open Jarvis's own Chrome window (separate profile)
+  open-app --screenshot      capture the monitor the user's mouse is on (only right after they ask)
+  open-app --screenshot-all  capture all monitors as one image
+"""
+import json, socket, sys
+
+def call(cmd):
+    try:
+        s = socket.create_connection(("127.0.0.1", 9334), timeout=20)
+    except OSError:
+        return {"ok": False, "error": "Jarvis app is not running on Windows."}
+    s.sendall(json.dumps(cmd).encode() + b"\n")
+    buf = b""
+    s.settimeout(30)
+    try:
+        while not buf.endswith(b"\n"):
+            d = s.recv(65536)
+            if not d: break
+            buf += d
+    except OSError:
+        pass
+    return json.loads(buf or b'{"ok": false, "error": "no reply"}')
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"):
+    print(__doc__); sys.exit(0)
+if a[0] == "--list":
+    r = call({"action": "list_apps", "filter": " ".join(a[1:])})
+    if r.get("ok"):
+        print(f"{r['total']} apps:"); print("\n".join(r["apps"]))
+    else:
+        print("ERROR:", r.get("error")); sys.exit(1)
+elif a[0] in ("--screenshot", "--screenshot-all"):
+    r = call({"action": "screenshot", "all": a[0] == "--screenshot-all"})
+    if r.get("ok"):
+        print(f"Saved {r['captured']} ({r['size']}) to {r['path']}")
+    else:
+        print("ERROR:", r.get("error")); sys.exit(1)
+elif a[0] == "--browser":
+    r = call({"action": "browser"}); print(json.dumps(r)); sys.exit(0 if r.get("ok") else 1)
+else:
+    r = call({"action": "open_app", "name": " ".join(a)})
+    if r.get("ok"):
+        msg = f"Opened {r['opened']}."
+        if r.get("other_matches"): msg += " (Other matches: " + ", ".join(r["other_matches"]) + ")"
+        print(msg)
+    else:
+        print("ERROR:", r.get("error")); sys.exit(1)

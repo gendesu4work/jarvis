@@ -1,0 +1,1 @@
+User prefers brief folder listings (just name the folder and move on without long printouts)

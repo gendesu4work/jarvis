@@ -1,0 +1,35 @@
+name: Build Jarvis installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+
+      - name: Build Jarvis-Setup.exe
+        shell: pwsh
+        run: |
+          $v = "1.0.${{ github.run_number }}"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" installer\Jarvis.iss
+          if (-not (Test-Path dist\Jarvis-Setup.exe)) { throw "installer not built" }
+
+      - name: Publish to Releases (tag: latest)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>$null
+          gh release create latest dist\Jarvis-Setup.exe --title "Jarvis (latest)" --notes "Download **Jarvis-Setup.exe**, run it, and follow the on-screen steps. Built from commit ${{ github.sha }}."

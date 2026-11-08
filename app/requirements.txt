@@ -1,0 +1,13 @@
+sounddevice
+numpy
+faster-whisper
+openwakeword
+piper-tts
+pillow
+psutil
+pycaw
+agent-client-protocol==0.9.0
+winrt-runtime
+winrt-Windows.Media.Control
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections

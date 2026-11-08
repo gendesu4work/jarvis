@@ -1,0 +1,19 @@
+/* Jarvis HUD theme overrides. Jarvis edits this file to restyle itself; changes apply live. */
+:root{
+  --bg:#020610;
+  --ink:#e6f0ff;
+  --dim:#80aacc;
+  --panel:rgba(10,25,50,0.65);
+  --accent:#3399ff;
+}
+body, .app { background-color: var(--bg); color: var(--ink); }
+.panel { border-color: rgba(51,153,255,0.4); background: var(--panel); }
+.panel::before, .panel::after { border-color: #3399ff; }
+h1, h2, h3, .title, .subtitle { color: #66b3ff !important; }
+button, .chip, .btn { background-color: rgba(51,153,255,0.15) !important; border-color: rgba(51,153,255,0.5) !important; color: #cce6ff !important; }
+button:hover, .chip:hover, .btn:hover { background-color: rgba(51,153,255,0.3) !important; }
+a { color: #80bfff; }
+#p-notes {
+  grid-column: span 2;
+  min-width: 320px;
+}

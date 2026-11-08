@@ -1,0 +1,11 @@
+{
+  "voice_volume_db": -8,
+  "speech_speed": 1.1,
+  "wake_sensitivity": 0.5,
+  "follow_up_seconds": 8,
+  "follow_up_after_question_seconds": 12,
+  "pause_to_end_sentence": 1.5,
+  "interrupt_threshold": 2.5,
+  "input_device": "fifine",
+  "output_device": "High Definition Audio Device"
+}

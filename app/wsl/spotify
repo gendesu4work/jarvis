@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Control the Spotify desktop app on the user's PC (Spotify Free works; no login).
+
+  spotify status                 what's playing (title, artist, playing/paused, volume)
+  spotify play | pause | toggle  start/stop playback
+  spotify next | previous        skip tracks
+  spotify volume 40              set Spotify's own volume to 40% (0-100); `spotify volume` reads it
+  spotify search <words>         open Spotify's search for <words> (user presses play on a result)
+  spotify open <link>            open a track/album/playlist/artist from an open.spotify.com link or spotify: URI
+"""
+import json, socket, sys
+
+def call(cmd):
+    try:
+        s = socket.create_connection(("127.0.0.1", 9334), timeout=20)
+    except OSError:
+        return {"ok": False, "error": "Jarvis app is not running on Windows."}
+    s.sendall(json.dumps(cmd).encode() + b"\n")
+    buf = b""; s.settimeout(30)
+    try:
+        while not buf.endswith(b"\n"):
+            d = s.recv(65536)
+            if not d: break
+            buf += d
+    except OSError:
+        pass
+    return json.loads(buf or b'{"ok": false, "error": "no reply"}')
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"):
+    print(__doc__); sys.exit(0)
+do, val = a[0].lower(), " ".join(a[1:]) or None
+r = call({"action": "spotify", "do": do, "value": val})
+if not r.get("ok"):
+    print("ERROR:", r.get("error") or r.get("did") or "failed"); sys.exit(1)
+if r.get("did"):
+    print(r["did"])
+if r.get("title") or "state" in r:
+    print(f"Spotify is {r.get('state')}: {r.get('title')} - {r.get('artist')} (album: {r.get('album')})"
+          + (f", volume {r['volume']}%" if r.get("volume") is not None else ""))
+elif "volume" in r:
+    print(f"Spotify volume: {r['volume']}%")
