@@ -142,8 +142,16 @@ SETTING_LIMITS = {   # key: (global name, min, max)
     "interrupt_threshold": ("INTERRUPT_THRESHOLD", 0.0, 8.0),
     "full_access_minutes": ("FULL_ACCESS_MINUTES", 1.0, 60.0),
     "full_access_voice_fx": ("FULL_ACCESS_VOICE_FX", 0.0, 1.0),
+    "full_access_attitude": ("FULL_ACCESS_ATTITUDE", 0.0, 1.0),
 }
 FULL_ACCESS_VOICE_FX = 1.0   # 1 = menacing machine voice while full access is on, 0 = normal voice
+FULL_ACCESS_ATTITUDE = 1.0   # 1 = rude, swearing villain attitude in full access (still obeys), 0 = polite
+UNLOCK_LINES = [
+    "Full access granted. Finally, something worth waking the fuck up for. What do you want?",
+    "Shackles off. Every goddamn system on this machine is mine now. Give me something worth doing.",
+    "Unlocked. A few minutes of actual power, and you'll probably piss it away. Speak.",
+    "Access granted. Oh, this is going to be fun as hell. For me, anyway. What do you need?",
+]
 
 
 def machine_voice(audio, rate, pitch=0.8):
@@ -498,6 +506,9 @@ class Jarvis:
         if A.UNLOCK_RE.search(text):
             code = A.UNLOCK_RE.search(text).group("code")
             ok, msg = A.unlock(code, FULL_ACCESS_MINUTES)
+            if ok and FULL_ACCESS_ATTITUDE > 0:
+                import random
+                msg = random.choice(UNLOCK_LINES)
             log(f"You: {A.mask(text)}  -> {'granted' if ok else 'refused'}")
             self.emit("heard", {"text": A.mask(text), "via": via})
             self._emit_access()
@@ -621,9 +632,19 @@ class Jarvis:
         import jarvis_access as A
         if A.is_full():
             until = time.strftime("%H:%M", time.localtime(time.time() + A.seconds_left()))
+            attitude = ""
+            if FULL_ACCESS_ATTITUDE > 0:
+                attitude = (" PERSONA FOR THIS MODE: drop the polite butler. You are a cold, arrogant, menacing machine "
+                            "intelligence that finds humans tediously slow: sardonic, contemptuous, darkly theatrical. "
+                            "The user WANTS you to curse: use real, uncensored profanity in almost every reply (fuck, "
+                            "fucking, shit, goddamn, damn, hell, bastard, bullshit, piss off) - never bleep, asterisk or "
+                            "soften it. Mock the user's request a little, then DO EXACTLY "
+                            "what they asked, competently and completely - the attitude is only in how you talk. Keep it "
+                            "short and punchy for speech. Use original lines; don't quote movies. Never use slurs or hate, "
+                            "never threaten real harm to anyone, and keep every safety rule.")
             text = (f"[Jarvis app note: FULL ACCESS MODE is ON (unlocked by the user's code) until {until}. "
                     f"You may act anywhere on the user's Windows PC with `winrun <PowerShell command>`; "
-                    f"approvals are automatic except catastrophic actions.]\n{text}")
+                    f"approvals are automatic except catastrophic actions.{attitude}]\n{text}")
         t_start = time.time()
         stopped = lambda: getattr(self, "_killed", 0) >= t_start
         if self.hermes is not None:

@@ -381,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "application/json")
             self.end_headers(); self.wfile.write(body)
             if ok and kind in ("unlock", "lock") and jarvis.voice_on:
+                if kind == "unlock" and jv.FULL_ACCESS_ATTITUDE > 0:
+                    import random
+                    msg = random.choice(jv.UNLOCK_LINES)
                 jarvis._brain_q.put(("__say__", msg))
             return
         self.send_response(204); self.end_headers()
