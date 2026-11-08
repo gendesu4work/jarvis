@@ -51,6 +51,9 @@ def broadcast(kind, data):
         snapshot["approval"] = data
     elif kind == "approval_done":
         snapshot["approval"] = None
+    elif kind == "access":
+        data = dict(data, at=time.time())
+        snapshot["access"] = data
     if kind == "heard":            # the user just spoke/typed: screen capture allowed briefly
         try:
             bridge.last_user = time.time()
@@ -362,6 +365,24 @@ class Handler(BaseHTTPRequestHandler):
             refresh_now.set()
         elif kind == "approve":
             jarvis.answer_approval(str(cmd.get("option", "deny"))[:40])
+        elif kind == "kill":
+            threading.Thread(target=jarvis.kill_switch, args=(bridge.kill_all,), daemon=True).start()
+        elif kind in ("unlock", "lock", "set_code"):
+            import jarvis_access as A
+            if kind == "unlock":
+                ok, msg = A.unlock(str(cmd.get("code", ""))[:200], jv.FULL_ACCESS_MINUTES)
+                jv.log(f"HUD unlock -> {'granted' if ok else 'refused'}")
+            elif kind == "lock":
+                A.lock(); ok, msg = True, "Full access locked."
+            else:
+                ok, msg = A.set_code(str(cmd.get("new", ""))[:200], str(cmd.get("current", ""))[:200])
+            jarvis._emit_access()
+            body = json.dumps({"ok": ok, "msg": msg}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.end_headers(); self.wfile.write(body)
+            if ok and kind in ("unlock", "lock") and jarvis.voice_on:
+                jarvis._brain_q.put(("__say__", msg))
+            return
         self.send_response(204); self.end_headers()
 
 
@@ -452,7 +473,13 @@ if __name__ == "__main__":
     threading.Thread(target=pc_loop, daemon=True).start()
     import jarvis_bridge
     bridge = jarvis_bridge.Bridge(emit=broadcast)
+    bridge.confirm = lambda title, detail: jarvis._on_permission(
+        title, detail, [{"id": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                        {"id": "deny", "name": "Deny", "kind": "reject_once"}]) == "allow_once"
     bridge.start()
+    jarvis.bridge_kill = bridge.kill_all            # voice "kill switch" uses it too
+    import jarvis_access
+    snapshot["access"] = {"full": False, "left": 0, "has_code": jarvis_access.has_code(), "at": time.time()}
     jv.log(f"HUD at {url}")
 
     if not no_window:

@@ -3,6 +3,7 @@
 *.env
 auth.json
 machine.json
+access.json
 sync.json
 hud_url.txt
 *.log

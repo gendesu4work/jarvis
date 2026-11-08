@@ -31,6 +31,7 @@ SILENCE_TO_STOP = 1.2      # seconds of quiet that ends your sentence
 MAX_UTTERANCE = 20.0       # hard cap on one request, seconds
 FOLLOW_UP_WINDOW = 8.0     # during a conversation: how long Jarvis waits for your next sentence
 FOLLOW_UP_AFTER_QUESTION = 12.0  # ...when Jarvis just asked you something
+FULL_ACCESS_MINUTES = 10.0 # how long full access lasts after your secret code (settings: full_access_minutes)
 NAME_PAUSE = 0.7          # pause that ends a phrase while waiting for the name
 NAME_MAX_SEGMENT = 12.0    # longest phrase checked for the name, seconds
 GATE_MODEL = "base.en"   # small, fast model that only checks whether "Jarvis" was said
@@ -139,6 +140,7 @@ SETTING_LIMITS = {   # key: (global name, min, max)
     "follow_up_after_question_seconds": ("FOLLOW_UP_AFTER_QUESTION", 0.0, 40.0),
     "pause_to_end_sentence": ("SILENCE_TO_STOP", 0.6, 3.0),
     "interrupt_threshold": ("INTERRUPT_THRESHOLD", 0.0, 8.0),
+    "full_access_minutes": ("FULL_ACCESS_MINUTES", 1.0, 60.0),
 }
 
 
@@ -454,8 +456,77 @@ class Jarvis:
         elif self.state in ("standby", "booting") or not self.mic_on:
             self._manual_wake.set()
 
+    # ------------------------------------------------------- full access --
+    def _access_intercept(self, text, via):
+        """Handle 'access code …' / 'lock it' locally. The code never reaches the AI or the logs.
+        Returns True if the text was handled here."""
+        import jarvis_access as A
+        if A.KILL_RE.search(text):
+            self.emit("heard", {"text": text, "via": via})
+            self.kill_switch(getattr(self, "bridge_kill", None))
+            return True
+        if A.UNLOCK_RE.search(text):
+            code = A.UNLOCK_RE.search(text).group("code")
+            ok, msg = A.unlock(code, FULL_ACCESS_MINUTES)
+            log(f"You: {A.mask(text)}  -> {'granted' if ok else 'refused'}")
+            self.emit("heard", {"text": A.mask(text), "via": via})
+            self._emit_access()
+            self._brain_q.put(("__say__", msg))
+            return True
+        if A.LOCK_RE.search(text) and A.is_full():
+            A.lock()
+            log("You: lock -> full access off")
+            self.emit("heard", {"text": text, "via": via})
+            self._emit_access()
+            self._brain_q.put(("__say__", "Full access locked."))
+            return True
+        return False
+
+    def kill_switch(self, bridge_kill=None):
+        """Stop EVERYTHING now: lock full access, cancel the AI's task, kill Windows commands,
+        deny any pending approval, stop speaking, drop queued requests."""
+        import jarvis_access as A
+        A.lock()
+        self._killed = time.time()
+        while not self._brain_q.empty():
+            try:
+                self._brain_q.get_nowait()
+            except queue.Empty:
+                break
+        if self._pending is not None:
+            self._answers.put("deny")
+        self._await_answer.clear(); self._followup.clear()
+        self.stop_speaking(); self._player_stop()
+        n = 0
+        if bridge_kill:
+            try:
+                n = bridge_kill()
+            except Exception:
+                pass
+        if self.hermes is not None:                 # stop the AI mid-task (it restarts fresh next time)
+            try:
+                self.hermes._reset()
+            except Exception:
+                pass
+        try:
+            subprocess.run(P.wsl("pkill", "-f", ".hermes/hermes-agent"), capture_output=True, timeout=15,
+                           creationflags=NO_WINDOW)
+        except Exception:
+            pass
+        log(f"KILL SWITCH: full access off, AI task stopped, {n} Windows command(s) killed.")
+        self.emit("action", {"text": f"KILL SWITCH — everything stopped, full access off ({n} command(s) killed)"})
+        self._emit_access()
+        self.set_state("standby")
+        self._brain_q.put(("__say__", "Kill switch engaged. Everything is stopped and full access is off."))
+
+    def _emit_access(self):
+        import jarvis_access as A
+        self.emit("access", {"full": A.is_full(), "left": A.seconds_left(), "has_code": A.has_code()})
+
     def submit_text(self, text):
         text = (text or "").strip()
+        if text and self._access_intercept(text, "typed"):
+            return
         if text:
             self.emit("heard", {"text": text, "via": "typed"})
             self._brain_q.put((text, False))
@@ -476,6 +547,12 @@ class Jarvis:
         while True:
             text, spoken = self._brain_q.get()
             self._busy.set()
+            if text == "__say__":                     # local reply (full-access unlock/lock)
+                msg = spoken
+                self.emit("reply", {"text": msg, "ok": True, "latency": 0})
+                self.say(msg)
+                self._busy.clear(); self.set_state("standby")
+                continue
             if text == "__greet__":
                 self.say("Jarvis online.")
                 self._busy.clear(); self.set_state("standby")
@@ -490,6 +567,10 @@ class Jarvis:
             t0 = time.time()
             reply, ok = self._ask(text)
             lat = time.time() - t0
+            if getattr(self, "_killed", 0) >= t0:      # kill switch hit while it was working
+                log("Task stopped by kill switch.")
+                self._busy.clear()
+                continue
             log(f"Jarvis ({lat:.1f}s): {reply}")
             self.emit("reply", {"text": reply, "ok": ok, "latency": round(lat, 1)})
             self.say(reply)
@@ -507,15 +588,27 @@ class Jarvis:
     # ------------------------------------------------------- hermes link --
     def _ask(self, text):
         """Ask Hermes over the persistent ACP link; falls back to one-shot mode if it fails."""
+        import jarvis_access as A
+        if A.is_full():
+            until = time.strftime("%H:%M", time.localtime(time.time() + A.seconds_left()))
+            text = (f"[Jarvis app note: FULL ACCESS MODE is ON (unlocked by the user's code) until {until}. "
+                    f"You may act anywhere on the user's Windows PC with `winrun <PowerShell command>`; "
+                    f"approvals are automatic except catastrophic actions.]\n{text}")
+        t_start = time.time()
+        stopped = lambda: getattr(self, "_killed", 0) >= t_start
         if self.hermes is not None:
             try:
                 reply = tidy_reply(self.hermes.ask(text, timeout=HERMES_TIMEOUT))
+                if stopped():
+                    return "Stopped.", False
                 if re.search(r"RESOURCE_EXHAUSTED|\b429\b|free tier", reply, re.I) and len(reply) > 200:
                     return "I've hit Google's free usage limit. Give me about a minute, then ask again.", False
                 if reply:
                     return reply, True
                 return "Sorry, I didn't get an answer back.", False
             except Exception as e:
+                if stopped():
+                    return "Stopped.", False          # kill switch: never retry the task another way
                 log(f"ACP ask failed ({e!r}); using one-shot mode")
         reply, ok = ask_hermes(text)
         return tidy_reply(reply), ok
@@ -530,6 +623,10 @@ class Jarvis:
         if m and m.group(1).startswith(P.WORKSPACE_WSL + "/") and ".." not in m.group(1):
             self.emit("activity", {"text": "Edited " + m.group(1).split("/jarvis/", 1)[1]})
             return allow_once                    # its own folder: no need to ask
+        import jarvis_access as A
+        if A.is_full() and not A.HARD_RISK.search(f"{title} {detail}"):
+            self.emit("activity", {"text": f"Auto-approved (full access): {title}"})
+            return allow_once                    # full access: no prompts, except catastrophic actions
         # Everything else: ask the user (HUD buttons or voice).
         req = {"id": str(time.time()), "title": title, "detail": detail,
                "options": [o for o in options if o["id"] in ("allow_once", "allow_session", "deny")] or options}
@@ -677,6 +774,8 @@ class Jarvis:
         self._drain()
         if len(text) < 2:
             return False
+        if self._access_intercept(text, "voice"):
+            return True
         log(f"You: {text}")
         self.emit("heard", {"text": text, "via": "voice"})
         self.chime(up=False)
@@ -787,6 +886,8 @@ class Jarvis:
         rest = text[m.end():].strip(" ,.!?-")
         log("Name heard.")
         if len(re.sub(r"\W", "", rest)) >= 3:       # "Jarvis, what's the time?" -> ask right away
+            if self._access_intercept(rest, "voice"):
+                return
             log(f"You: {rest}")
             self.emit("heard", {"text": rest, "via": "voice"})
             self.chime(up=False)
@@ -803,6 +904,13 @@ class Jarvis:
                 m = os.path.getmtime(SETTINGS_PATH)
             except OSError:
                 m = None
+            import jarvis_access as A
+            full = A.is_full()
+            if full != getattr(self, "_was_full", False):      # full access turned on/off (or expired)
+                self._was_full = full
+                self._emit_access()
+                if not full:
+                    log("Full access ended.")
             if m != last:
                 last = m
                 applied = load_settings()

@@ -227,6 +227,33 @@ pre.cron{font-family:var(--mono);font-size:11px;color:#b9cfe8;white-space:pre-wr
 .apbtns button:hover{filter:brightness(1.15)}
 .stage[data-s="approval"] .statelabel{color:var(--warn)}
 
+/* ---------------- full access + kill switch ---------------- */
+.btn.fa{color:#fff;background:rgba(255,60,90,.25);border-color:var(--bad);box-shadow:0 0 14px rgba(255,60,90,.4)}
+.fabanner{position:fixed;left:50%;top:66px;transform:translateX(-50%);z-index:42;display:flex;align-items:center;gap:14px;
+  padding:8px 10px 8px 16px;border:1px solid var(--bad);background:rgba(60,4,14,.94);border-radius:3px;
+  box-shadow:0 0 40px rgba(255,60,90,.35);font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:#ffd6dd}
+.fabanner[hidden]{display:none}
+.fabanner i{width:8px;height:8px;border-radius:50%;background:var(--bad);box-shadow:0 0 10px var(--bad);animation:blink 1s infinite}
+.fabanner b{color:#fff;letter-spacing:.3em}
+.fatime{font-family:var(--display);font-size:16px;color:#fff;letter-spacing:.08em}
+.fabanner button{font-family:var(--display);font-weight:700;letter-spacing:.18em;font-size:11px;padding:7px 12px;
+  border-radius:2px;cursor:pointer;border:1px solid #ff9aab;background:transparent;color:#ffd6dd}
+.fabanner button.kill{background:#ff2448;border-color:#ff2448;color:#fff;font-size:13px;padding:9px 16px;
+  box-shadow:0 0 22px rgba(255,36,72,.7)}
+.fabanner button.kill:hover{background:#ff0a33}
+.accard{border-color:var(--bad)!important;box-shadow:0 0 60px rgba(255,60,90,.2)!important}
+.aphead.acc{color:var(--bad)}.aphead.acc i{background:var(--bad);box-shadow:0 0 10px var(--bad)}
+.acnote{font-size:12.5px;color:var(--dim);margin:2px 0 12px;line-height:1.5}
+.acrow{display:grid;grid-template-columns:140px 1fr;align-items:center;gap:10px;margin:8px 0}
+.acrow span{font-family:var(--mono);font-size:10px;letter-spacing:.15em;color:var(--dim);text-transform:uppercase}
+.acrow input{background:rgba(4,12,26,.8);border:1px solid var(--line2);color:var(--ink);padding:10px 12px;border-radius:3px;
+  font-family:var(--mono);font-size:14px;letter-spacing:.2em;outline:0}
+.acrow input:focus{border-color:var(--bad)}
+.acrow[hidden]{display:none}
+.acmsg{min-height:18px;font-family:var(--mono);font-size:11px;margin:6px 0 10px;color:var(--warn)}
+.acmsg.ok{color:var(--ok)}
+.aclink{margin-left:auto;border:0!important;color:var(--dim)!important;text-decoration:underline;font-size:11px!important}
+
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes blink{50%{opacity:.25}}
 @keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
@@ -264,6 +291,7 @@ pre.cron{font-family:var(--mono);font-size:11px;color:#b9cfe8;white-space:pre-wr
     <div class="tools">
       <button class="btn on" id="tMic" title="Listen for 'Hey Jarvis'">Mic · On</button>
       <button class="btn on" id="tVoice" title="Speak replies aloud">Voice · On</button>
+      <button class="btn" id="tAccess" title="Full access (secret code)">Access · Locked</button>
       <button class="btn" id="tFull">Full screen</button>
       <div class="clock" id="clock">--:--:--<small>---</small></div>
     </div>
@@ -365,6 +393,30 @@ pre.cron{font-family:var(--mono);font-size:11px;color:#b9cfe8;white-space:pre-wr
     <span id="footstate">LINK · CONNECTING</span>
     <span>SANDBOX · <b>ASKS BEFORE RISKY ACTIONS</b></span>
   </footer>
+</div>
+
+<div class="fabanner" id="faBanner" role="status" hidden>
+  <i></i><b>FULL ACCESS</b><span>Jarvis can act anywhere on this PC without asking</span>
+  <span class="fatime" id="faTime">10:00</span>
+  <button id="faLock" title="End full access">LOCK</button>
+  <button class="kill" id="faKill" title="Stop everything now (Ctrl+Shift+K)">■ KILL SWITCH</button>
+</div>
+
+<div class="approval" id="accessDlg" role="dialog" aria-labelledby="acTitle" hidden>
+  <form class="apcard accard" id="acForm" autocomplete="off">
+    <div class="aphead acc"><i></i>FULL ACCESS</div>
+    <div class="aptitle" id="acTitle">Enter your access code</div>
+    <div class="acnote" id="acNote">Unlocks full control of this PC for a limited time. You can also say: “Jarvis, access code …”.</div>
+    <label class="acrow" id="acCurRow" hidden><span>Current code</span><input type="password" id="acCur"></label>
+    <label class="acrow"><span id="acMainLbl">Access code</span><input type="password" id="acCode"></label>
+    <label class="acrow" id="acConfRow" hidden><span>Repeat new code</span><input type="password" id="acConf"></label>
+    <div class="acmsg" id="acMsg"></div>
+    <div class="apbtns">
+      <button type="submit" class="yes" id="acGo">UNLOCK</button>
+      <button type="button" id="acCancel">CANCEL</button>
+      <button type="button" class="aclink" id="acChange">Change code</button>
+    </div>
+  </form>
 </div>
 
 <div class="approval" id="approval" role="alertdialog" aria-labelledby="apTitle" hidden>
@@ -602,7 +654,7 @@ function connect(){
   es.addEventListener("snapshot", e=>{ const d = JSON.parse(e.data);
     renderDevices(d.devices); renderToggles(d.toggles); renderPanels(d.panels); renderStats(d.stats);
     $("log").innerHTML = ""; logCount = 0; (d.history||[]).forEach(addLog);
-    applyCustom(d.custom); renderNotes(d.notes || ""); showApproval(d.approval || null); renderUsage(d.usage); renderPc(d.pc);
+    applyCustom(d.custom); renderNotes(d.notes || ""); showApproval(d.approval || null); renderUsage(d.usage); renderPc(d.pc); if (d.access) renderAccess(d.access);
     setState(d.state.state, d.state.detail); });
   es.addEventListener("custom", e=> applyCustom(JSON.parse(e.data)));
   es.addEventListener("usage", e=> renderUsage(JSON.parse(e.data)));
@@ -622,6 +674,7 @@ function connect(){
   es.addEventListener("stats", e=> renderStats(JSON.parse(e.data)));
   es.addEventListener("devices", e=> renderDevices(JSON.parse(e.data)));
   es.addEventListener("toggles", e=> renderToggles(JSON.parse(e.data)));
+  es.addEventListener("access", e=> renderAccess(JSON.parse(e.data)));
 }
 connect();
 
@@ -635,7 +688,58 @@ $("tMic").onclick = ()=> api({type:"toggle", key:"mic", value:!S.toggles.mic});
 $("tVoice").onclick = ()=> api({type:"toggle", key:"voice", value:!S.toggles.voice});
 $("refresh").onclick = ()=> api({type:"refresh"});
 $("tFull").onclick = ()=> document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+
+/* ---------------- full access + kill switch ---------------- */
+let ACC = {full:false, left:0, has_code:false, at:Date.now()/1000}, acMode = "unlock";
+const post = (body)=> fetch(`/cmd?t=${T}`, {method:"POST", body:JSON.stringify(body)}).then(r=> r.status===200 ? r.json() : {ok:true}).catch(()=>({ok:false,msg:"Jarvis is not responding."}));
+function accLeft(){ return Math.max(0, Math.round(ACC.left - (Date.now()/1000 - (ACC.at||Date.now()/1000)))); }
+function renderAccess(a){
+  if (a) ACC = Object.assign({}, a, {at: a.at || Date.now()/1000});
+  const full = ACC.full && accLeft() > 0;
+  $("faBanner").hidden = !full;
+  $("tAccess").className = "btn" + (full ? " fa" : "");
+  const s = accLeft();
+  $("faTime").textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  $("tAccess").textContent = full ? `Full access · ${$("faTime").textContent}` : "Access · Locked";
+}
+setInterval(()=> renderAccess(), 1000);
+function openAccess(mode){
+  acMode = mode || (ACC.has_code ? "unlock" : "set");
+  const set = acMode !== "unlock", change = acMode === "change";
+  $("acTitle").textContent = acMode === "unlock" ? "Enter your access code" : change ? "Change your access code" : "Create your access code";
+  $("acNote").textContent = acMode === "unlock"
+    ? "Unlocks full control of this PC for a limited time. You can also say: “Jarvis, access code …”."
+    : "Pick a code you'll remember (4+ letters/digits; spoken codes work best as words). It's stored scrambled on this PC only.";
+  $("acMainLbl").textContent = set ? "New code" : "Access code";
+  $("acCurRow").hidden = !change; $("acConfRow").hidden = !set;
+  $("acGo").textContent = acMode === "unlock" ? "UNLOCK" : "SAVE CODE";
+  $("acChange").hidden = acMode !== "unlock" || !ACC.has_code;
+  ["acCur","acCode","acConf"].forEach(id=> $(id).value = "");
+  $("acMsg").textContent = ""; $("acMsg").className = "acmsg";
+  $("accessDlg").hidden = false; setTimeout(()=> (change ? $("acCur") : $("acCode")).focus(), 50);
+}
+$("tAccess").onclick = ()=> ACC.full && accLeft() > 0 ? post({type:"lock"}) : openAccess();
+$("acCancel").onclick = ()=> $("accessDlg").hidden = true;
+$("acChange").onclick = ()=> openAccess("change");
+$("acForm").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const msg = $("acMsg");
+  if (acMode === "unlock"){
+    const r = await post({type:"unlock", code:$("acCode").value});
+    if (r.ok) $("accessDlg").hidden = true; else { msg.textContent = r.msg; $("acCode").value = ""; }
+    return;
+  }
+  if ($("acCode").value !== $("acConf").value){ msg.textContent = "The two new codes don't match."; return; }
+  const r = await post({type:"set_code", new:$("acCode").value, current:$("acCur").value});
+  msg.textContent = r.msg; msg.className = "acmsg" + (r.ok ? " ok" : "");
+  if (r.ok){ ACC.has_code = true; setTimeout(()=> openAccess("unlock"), 900); }
+});
+$("faLock").onclick = ()=> post({type:"lock"});
+$("faKill").onclick = ()=> post({type:"kill"});
+
 document.addEventListener("keydown", e=>{
+  if (e.ctrlKey && e.shiftKey && (e.key === "K" || e.key === "k")) { e.preventDefault(); post({type:"kill"}); return; }
+  if (!$("accessDlg").hidden) { if (e.key === "Escape") $("accessDlg").hidden = true; return; }
   if (document.activeElement === $("inp")) { if (e.key === "Escape") $("inp").blur(); return; }
   if (currentApproval) return;
   if (e.code === "Space") { e.preventDefault(); api({type:"wake"}); }

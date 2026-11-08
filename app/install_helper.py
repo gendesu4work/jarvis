@@ -5,7 +5,7 @@ import jarvis_paths as P
 HERE = os.path.dirname(os.path.abspath(__file__))
 FILES = {"jarvis-ask.sh": "jarvis-ask", os.path.join("wsl", "jarvis-relay"): "jarvis-relay",
          os.path.join("wsl", "open-app"): "open-app", os.path.join("wsl", "jarvis-usage"): "jarvis-usage",
-         os.path.join("wsl", "spotify"): "spotify"}
+         os.path.join("wsl", "spotify"): "spotify", os.path.join("wsl", "winrun"): "winrun"}
 for src, name in FILES.items():
     data = open(os.path.join(HERE, src), "rb").read().lstrip(b"\xef\xbb\xbf").replace(b"\r\n", b"\n")
     dst = f"{P.WSL_BIN}/{name}"

@@ -239,6 +239,11 @@ class Bridge:
             return {"ok": ok, "note": "Separate Jarvis Chrome profile, no saved passwords or personal data."}
         if action == "screenshot":
             return self.screenshot(bool(cmd.get("all")))
+        if action == "win_exec":
+            return self.win_exec(str(cmd.get("command", "")), cmd.get("timeout"))
+        if action == "access_status":
+            import jarvis_access as A
+            return {"ok": True, "full_access": A.is_full(), "seconds_left": A.seconds_left()}
         if action == "spotify":
             import jarvis_spotify
             r = jarvis_spotify.handle(cmd, launch_app=lambda n: self.handle({"action": "open_app", "name": n}))
@@ -258,8 +263,63 @@ class Bridge:
     SCREEN_KEEP = 3600           # screenshots are deleted after an hour
     last_user = 0.0              # set by the HUD whenever the user speaks or types
 
+    # --- full access: run anything on Windows (only after the user's secret code) -------------
+    confirm = None      # set by the HUD: confirm(title, detail) -> bool (asks the user)
+
+    def win_exec(self, command, timeout=None):
+        import jarvis_access as A
+        if not A.is_full():
+            return {"ok": False, "error": "Full access is locked. Ask the user to say or type their access code "
+                                          "(e.g. 'Jarvis, access code ...') to unlock it."}
+        command = command.strip()[:8000]
+        if not command:
+            return {"ok": False, "error": "No command given."}
+        if A.HARD_RISK.search(command):
+            ok = self.confirm("run a high-risk Windows command", command) if self.confirm else False
+            if not ok:
+                return {"ok": False, "error": "The user did not approve this high-risk command."}
+        t = max(5, min(600, int(timeout or 120)))
+        self.emit("action", {"text": f"Windows command (full access): {command[:120]}"})
+        _log(f"win_exec: {command[:300]}")
+        p = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=os.path.expanduser("~"),
+                             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+        self._running.add(p)                         # so the kill switch can stop it
+        try:
+            out, err = p.communicate(timeout=t)
+        except subprocess.TimeoutExpired:
+            self._kill_tree(p.pid)
+            return {"ok": False, "error": f"Timed out after {t}s."}
+        finally:
+            self._running.discard(p)
+        if self._killed_at and time.time() - self._killed_at < 5:
+            return {"ok": False, "error": "Stopped by the user's kill switch."}
+        out = out.decode("utf-8", "replace")
+        err = err.decode("utf-8", "replace")
+        return {"ok": p.returncode == 0, "exit_code": p.returncode,
+                "output": out[-12000:], "errors": err[-4000:]}
+
+    _running = set()
+    _killed_at = 0.0
+
+    @staticmethod
+    def _kill_tree(pid):
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+
+    def kill_all(self):
+        """Kill switch: stop every Windows command Jarvis started."""
+        self._killed_at = time.time()
+        n = 0
+        for p in list(self._running):
+            if p.poll() is None:
+                self._kill_tree(p.pid); n += 1
+        self._running.clear()
+        return n
+
     def screenshot(self, all_screens=False):
-        if time.time() - self.last_user > self.SCREEN_WINDOW:
+        import jarvis_access as A
+        if time.time() - self.last_user > self.SCREEN_WINDOW and not A.is_full():
             return {"ok": False, "error": "Screen capture is only allowed right after the user asks for it. "
                                           "Ask the user to repeat the request."}
         import ctypes
