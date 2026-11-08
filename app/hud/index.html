@@ -445,6 +445,9 @@ const HINTS = {
   thinking:"THINKING", speaking:"SPEAKING — ESC TO STOP", error:"FAULT",
   approval:"WAITING FOR YOUR PERMISSION — SAY YES OR NO"
 };
+// Full access: everything turns blood red (except the yellow permission state)
+const FULL_RED = [352,100,58];
+function stateColor(st){ return (typeof ACC !== "undefined" && ACC.full && accLeft() > 0 && st !== "approval") ? FULL_RED : (COLORS[st] || COLORS.standby); }
 let S = {state:"booting", level:0, target:0, hue:COLORS.booting.slice(), toggles:{voice:true,mic:true}};
 let started = Date.now();
 
@@ -459,7 +462,7 @@ function setState(st, detail){
   if (st === "listening") $("slabel").textContent = detail === "conversation" ? "CONVERSATION" : "LISTENING";
   document.querySelectorAll(".seg").forEach(s => s.classList.toggle("on",
      s.dataset.k === st || (st === "transcribing" && s.dataset.k === "listening")));
-  const c = COLORS[st] || COLORS.standby;
+  const c = stateColor(st);
   document.documentElement.style.setProperty("--accent", `hsl(${c[0]} ${c[1]}% ${c[2]}%)`);
   const rgb = hslToRgb(c[0], c[1], c[2]);
   document.documentElement.style.setProperty("--accent-rgb", rgb.join(","));
@@ -690,12 +693,13 @@ $("refresh").onclick = ()=> api({type:"refresh"});
 $("tFull").onclick = ()=> document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 
 /* ---------------- full access + kill switch ---------------- */
-let ACC = {full:false, left:0, has_code:false, at:Date.now()/1000}, acMode = "unlock";
+var ACC = {full:false, left:0, has_code:false, at:Date.now()/1000}, acMode = "unlock";
 const post = (body)=> fetch(`/cmd?t=${T}`, {method:"POST", body:JSON.stringify(body)}).then(r=> r.status===200 ? r.json() : {ok:true}).catch(()=>({ok:false,msg:"Jarvis is not responding."}));
 function accLeft(){ return Math.max(0, Math.round(ACC.left - (Date.now()/1000 - (ACC.at||Date.now()/1000)))); }
 function renderAccess(a){
   if (a) ACC = Object.assign({}, a, {at: a.at || Date.now()/1000});
   const full = ACC.full && accLeft() > 0;
+  if (full !== renderAccess.was) { renderAccess.was = full; setState(S.state); }
   $("faBanner").hidden = !full;
   $("tAccess").className = "btn" + (full ? " fa" : "");
   const s = accLeft();
@@ -781,7 +785,7 @@ function draw(now){
   const t = (now - t0)/1000; frame++;
   S.level += (S.target - S.level) * 0.25; S.target *= 0.92;
   const lv = S.level, st = S.state;
-  const c = COLORS[st] || COLORS.standby;
+  const c = stateColor(st);
   for (let i=0;i<3;i++) S.hue[i] += (c[i]-S.hue[i])*0.06;
   const [h,s,l] = S.hue;
 

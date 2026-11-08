@@ -141,7 +141,32 @@ SETTING_LIMITS = {   # key: (global name, min, max)
     "pause_to_end_sentence": ("SILENCE_TO_STOP", 0.6, 3.0),
     "interrupt_threshold": ("INTERRUPT_THRESHOLD", 0.0, 8.0),
     "full_access_minutes": ("FULL_ACCESS_MINUTES", 1.0, 60.0),
+    "full_access_voice_fx": ("FULL_ACCESS_VOICE_FX", 0.0, 1.0),
 }
+FULL_ACCESS_VOICE_FX = 1.0   # 1 = menacing machine voice while full access is on, 0 = normal voice
+
+
+def machine_voice(audio, rate, pitch=0.8):
+    """Original 'menacing machine' voice: deeper (pitch x0.8, duration unchanged because the speech
+    was synthesized faster), metallic comb resonance, ring-modulator buzz, grit, and a cold echo."""
+    from scipy.signal import fftconvolve, resample_poly
+    x = resample_poly(audio, 5, 4).astype(np.float32)             # 0.8x pitch (and 1.25x length)
+    n = np.arange(len(x)) / rate
+    d = int(rate * 0.0045)                                         # metallic comb (~220 Hz ring)
+    y = x.copy(); y[d:] += 0.5 * x[:-d]
+    d2 = int(rate * 0.011); y[d2:] += 0.25 * x[:-d2]
+    y = 0.72 * y + 0.38 * y * np.sin(2 * np.pi * 55 * n)           # ring modulation: robotic buzz
+    sub = resample_poly(x, 2, 1)[:len(x)]                          # faint sub-octave growl
+    sub = np.pad(sub, (0, max(0, len(x) - len(sub))))
+    y += 0.18 * sub * (np.abs(x) > 0.02)
+    y = np.tanh(2.4 * y) / np.tanh(2.4)                            # grit
+    t = np.arange(int(rate * 0.9)) / rate                          # cold, cavernous echo
+    rng = np.random.default_rng(7)
+    ir = rng.standard_normal(len(t)).astype(np.float32) * np.exp(-t / 0.28)
+    ir[0] = 0; ir /= np.abs(ir).sum() / 6
+    wet = fftconvolve(y, ir)[:len(y)]
+    y = 0.8 * y + 0.22 * wet
+    return (y / (np.abs(y).max() + 1e-6) * 0.92).astype(np.float32)
 
 
 def load_settings():
@@ -419,10 +444,10 @@ class Jarvis:
             if under[0]:
                 log(f"audio: {under[0]} playback dropouts")
 
-    def _synth(self, text):
+    def _synth(self, text, speed_mult=1.0):
         parts = []
         from piper import SynthesisConfig
-        cfg = SynthesisConfig(length_scale=1.0 / max(0.5, SPEECH_SPEED))
+        cfg = SynthesisConfig(length_scale=1.0 / max(0.5, SPEECH_SPEED * speed_mult))
         for chunk in self.voice.synthesize(text, syn_config=cfg):
             arr = getattr(chunk, "audio_float_array", None)
             if arr is None:
@@ -435,7 +460,12 @@ class Jarvis:
         if not text or not self.voice_on:
             return
         self.set_state("speaking")
-        self._play(self._synth(text), self.vrate, report_levels=True)
+        import jarvis_access as A
+        if A.is_full() and FULL_ACCESS_VOICE_FX > 0:   # full access: menacing machine voice
+            audio = machine_voice(self._synth(text, speed_mult=1.25), self.vrate)
+        else:
+            audio = self._synth(text)
+        self._play(audio, self.vrate, report_levels=True)
         self.emit("level", {"v": 0.0, "src": "out"})
 
     def chime(self, up=True):
